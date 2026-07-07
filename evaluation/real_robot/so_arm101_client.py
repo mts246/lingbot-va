@@ -105,12 +105,16 @@ def make_robot(
     port: str, robot_id: str,
     cam_front_index: int, cam_wrist_index: int,
     width: int, height: int, fps: int,
+    fourcc: str | None = None,
 ) -> SO101Follower:
+    cam_kwargs: dict = dict(width=width, height=height, fps=fps)
+    if fourcc:
+        cam_kwargs["fourcc"] = fourcc
     cam_cfg = {
         "observation.images.front": OpenCVCameraConfig(
-            index_or_path=cam_front_index, width=width, height=height, fps=fps),
+            index_or_path=cam_front_index, **cam_kwargs),
         "observation.images.wrist.left": OpenCVCameraConfig(
-            index_or_path=cam_wrist_index, width=width, height=height, fps=fps),
+            index_or_path=cam_wrist_index, **cam_kwargs),
     }
     cfg = SO101FollowerConfig(port=port, id=robot_id, cameras=cam_cfg,
                               use_degrees=True)
@@ -147,6 +151,7 @@ class So101Client:
             args.robot_port, args.robot_id,
             args.cam_front_index, args.cam_wrist_index,
             args.width, args.height, args.fps,
+            fourcc=args.fourcc,
         )
         opts = [
             ("grpc.max_send_message_length", 100 << 20),
@@ -314,6 +319,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--fourcc", default=None,
+                    help="4-char FOURCC code, e.g. MJPG / YUYV. Default None = auto-detect.")
     ap.add_argument("--server", default="127.0.0.1:8080")
     ap.add_argument("--prompt", required=True)
     ap.add_argument("--max-steps", type=int, default=0,
