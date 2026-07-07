@@ -224,13 +224,20 @@ class So101Client:
     def send_obs(self, obs: TimedObservation) -> None:
         pickle_and_send(self.stub.SendObservations, obs)
 
-    def wait_for_chunk(self, poll_s: float = 0.02,
-                       timeout_s: float = 30.0) -> list[TimedAction]:
-        """Block until server returns a non-empty action chunk."""
-        deadline = time.time() + timeout_s
+    def wait_for_chunk(self, poll_s: float = 0.05,
+                       rpc_timeout_s: float = 120.0,
+                       total_timeout_s: float = 300.0) -> list[TimedAction]:
+        """Block until server returns a non-empty action chunk.
+
+        The first predict of a session includes KV-cache warmup + a full
+        diffusion pass which can take 20-40s on a single GPU, so
+        `rpc_timeout_s` defaults to 120s. Later chunks are ~1-2s each.
+        """
+        deadline = time.time() + total_timeout_s
         while not self._stop:
             try:
-                ret = self.stub.GetActions(services_pb2.Empty(), timeout=5.0)
+                ret = self.stub.GetActions(services_pb2.Empty(),
+                                           timeout=rpc_timeout_s)
             except grpc.RpcError as e:
                 LOG.warning("GetActions error: %s (retrying)", e)
                 time.sleep(poll_s)
