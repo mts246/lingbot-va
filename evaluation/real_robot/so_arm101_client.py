@@ -246,8 +246,9 @@ class So101Client:
             if ret.data:
                 actions = pickle.loads(ret.data)
                 waited = time.perf_counter() - t0
-                LOG.info("wait_for_chunk: got %d actions after %.2fs "
-                         "(payload=%d B)", len(actions), waited, len(ret.data))
+                LOG.warning("got chunk: %d actions after %.3fs "
+                            "(payload=%d B)",
+                            len(actions), waited, len(ret.data))
                 return actions
             if time.time() > deadline:
                 raise TimeoutError("Server never returned actions.")
