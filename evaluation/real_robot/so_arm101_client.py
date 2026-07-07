@@ -67,35 +67,42 @@ LOG = logging.getLogger("so_arm101_client")
 
 
 # -----------------------------------------------------------------------------
-# 2) TimedObservation / TimedAction stubs -- SAME class-module-path as server.
-# We do NOT import from lerobot.async_inference.helpers so we don't pull in
-# the whole async_inference machinery. But we set __module__ so the pickled
-# object round-trips with the server (whose stub also lives at the same path).
+# 2) TimedObservation / TimedAction.
+# The lerobot install on the robot host already ships these under
+# `lerobot.async_inference.helpers`. Use them directly so pickle can round-trip
+# to the server (whose stub is registered at the same module path). If for some
+# reason the module is absent, fall back to a local stub with the same class
+# path.
 # -----------------------------------------------------------------------------
-@dataclass
-class TimedData:
-    timestamp: float
-    timestep: int
-    def get_timestamp(self): return self.timestamp
-    def get_timestep(self): return self.timestep
+try:
+    from lerobot.async_inference.helpers import (  # type: ignore
+        TimedObservation,
+        TimedAction,
+    )
+    _USING_LEROBOT_HELPERS = True
+except Exception:
+    _USING_LEROBOT_HELPERS = False
 
+    @dataclass
+    class TimedData:
+        timestamp: float
+        timestep: int
+        def get_timestamp(self): return self.timestamp
+        def get_timestep(self): return self.timestep
 
-@dataclass
-class TimedAction(TimedData):
-    action: torch.Tensor
-    def get_action(self): return self.action
+    @dataclass
+    class TimedAction(TimedData):
+        action: torch.Tensor
+        def get_action(self): return self.action
 
+    @dataclass
+    class TimedObservation(TimedData):
+        observation: dict[str, Any]
+        must_go: bool = False
+        def get_observation(self): return self.observation
 
-@dataclass
-class TimedObservation(TimedData):
-    observation: dict[str, Any]
-    must_go: bool = False
-    def get_observation(self): return self.observation
-
-
-# Match server-side (and lerobot's real) class paths so pickle can round-trip.
-for _cls in (TimedData, TimedAction, TimedObservation):
-    _cls.__module__ = "lerobot.async_inference.helpers"
+    for _cls in (TimedData, TimedAction, TimedObservation):
+        _cls.__module__ = "lerobot.async_inference.helpers"
 
 
 # -----------------------------------------------------------------------------
