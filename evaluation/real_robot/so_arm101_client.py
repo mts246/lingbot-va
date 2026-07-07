@@ -234,6 +234,7 @@ class So101Client:
         `rpc_timeout_s` defaults to 120s. Later chunks are ~1-2s each.
         """
         deadline = time.time() + total_timeout_s
+        t0 = time.perf_counter()
         while not self._stop:
             try:
                 ret = self.stub.GetActions(services_pb2.Empty(),
@@ -243,7 +244,11 @@ class So101Client:
                 time.sleep(poll_s)
                 continue
             if ret.data:
-                return pickle.loads(ret.data)
+                actions = pickle.loads(ret.data)
+                waited = time.perf_counter() - t0
+                LOG.info("wait_for_chunk: got %d actions after %.2fs "
+                         "(payload=%d B)", len(actions), waited, len(ret.data))
+                return actions
             if time.time() > deadline:
                 raise TimeoutError("Server never returned actions.")
             time.sleep(poll_s)
