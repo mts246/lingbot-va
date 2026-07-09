@@ -290,6 +290,18 @@ class LingBotVAServicer(services_pb2_grpc.AsyncInferenceServicer):
             # 3) first session subdir
             self.dump_dir = self.dump_dir_root / f"session_{self._session_idx:03d}"
             self.dump_dir.mkdir(parents=True, exist_ok=True)
+            # Cross-link session_000 with the initial latent dump dir set up
+            # by wan_va_server._reset() at construction. Subsequent sessions
+            # get their own link inside SendPolicyInstructions.
+            try:
+                latent_dir = Path(self.va.exp_save_root)
+                (self.dump_dir / "latent_dir.txt").write_text(
+                    str(latent_dir) + "\n")
+                link = self.dump_dir / "latents"
+                if not (link.exists() or link.is_symlink()):
+                    link.symlink_to(latent_dir)
+            except Exception as e:  # noqa: BLE001
+                LOG.warning("Could not link initial latent_dir: %s", e)
             LOG.info("Image dump enabled -> %s", self.dump_dir_root)
 
         LOG.info(
@@ -318,6 +330,21 @@ class LingBotVAServicer(services_pb2_grpc.AsyncInferenceServicer):
                 self.dump_dir = self.dump_dir_root / f"session_{self._session_idx:03d}"
                 self.dump_dir.mkdir(parents=True, exist_ok=True)
                 LOG.info("New dump session -> %s", self.dump_dir)
+                # Cross-link this session with the latent dump dir created by
+                # wan_va_server._reset (which uses a timestamped exp_name).
+                # Both a plain-text pointer and a relative symlink are written
+                # so `decode_dumped_latents.py --latent-dir` can find them.
+                try:
+                    latent_dir = Path(self.va.exp_save_root)
+                    (self.dump_dir / "latent_dir.txt").write_text(
+                        str(latent_dir) + "\n")
+                    link = self.dump_dir / "latents"
+                    if link.exists() or link.is_symlink():
+                        link.unlink()
+                    link.symlink_to(latent_dir)
+                    LOG.info("  latent dump -> %s", latent_dir)
+                except Exception as e:  # noqa: BLE001
+                    LOG.warning("Could not link latent_dir: %s", e)
                 # always persist raw pickle bytes
                 raw = bytes(request.data)
                 try:

@@ -231,8 +231,25 @@ class So101Client:
             must_go=must_go,
         )
 
-    def send_obs(self, obs: TimedObservation) -> None:
-        pickle_and_send(self.stub.SendObservations, obs)
+    def send_obs(self, obs: TimedObservation,
+                 max_retries: int = 3,
+                 backoff_s: float = 0.2) -> bool:
+        """Best-effort SendObservations with bounded retry.
+
+        Returns True on success, False if all retries were exhausted (in which
+        case the control loop should just skip this obs and try again next
+        tick rather than crash the whole client).
+        """
+        for attempt in range(max_retries):
+            try:
+                pickle_and_send(self.stub.SendObservations, obs)
+                return True
+            except grpc.RpcError as e:
+                LOG.warning("SendObservations failed (attempt %d/%d): %s",
+                            attempt + 1, max_retries, e.code() if hasattr(e, "code") else e)
+                time.sleep(backoff_s * (attempt + 1))
+        LOG.error("SendObservations: giving up after %d retries", max_retries)
+        return False
 
     def wait_for_chunk(self, poll_s: float = 0.05,
                        rpc_timeout_s: float = 120.0,
