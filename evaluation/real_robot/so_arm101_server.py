@@ -704,6 +704,19 @@ def main() -> None:
         options=[
             ("grpc.max_send_message_length", 100 * 1024 * 1024),
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            # Allow client keepalive pings every 10s even when no RPC is
+            # in-flight. Must match / be more permissive than client-side
+            # keepalive_time_ms, otherwise the server will send GOAWAY and
+            # the client sees "Stream removed (Socket closed)".
+            ("grpc.keepalive_time_ms", 10_000),
+            ("grpc.keepalive_timeout_ms", 5_000),
+            ("grpc.keepalive_permit_without_calls", 1),
+            ("grpc.http2.max_pings_without_data", 0),
+            ("grpc.http2.min_time_between_pings_ms", 10_000),
+            ("grpc.http2.min_ping_interval_without_data_ms", 5_000),
+            # Never close idle connections on our side.
+            ("grpc.max_connection_idle_ms", 2_147_483_647),
+            ("grpc.max_connection_age_ms", 2_147_483_647),
         ],
     )
     services_pb2_grpc.add_AsyncInferenceServicer_to_server(servicer, server)

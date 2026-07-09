@@ -163,6 +163,16 @@ class So101Client:
         opts = [
             ("grpc.max_send_message_length", 100 << 20),
             ("grpc.max_receive_message_length", 100 << 20),
+            # Keepalive: send a PING every 10s so the tunnel / NAT / server
+            # HTTP2 layer never thinks the connection is idle. Without this the
+            # 20-40s first-inference wait very often trips "Stream removed
+            # (Socket closed)" on the WS tunnel or gRPC server side.
+            ("grpc.keepalive_time_ms", 10_000),
+            ("grpc.keepalive_timeout_ms", 5_000),
+            ("grpc.keepalive_permit_without_calls", 1),
+            ("grpc.http2.max_pings_without_data", 0),
+            ("grpc.http2.min_time_between_pings_ms", 10_000),
+            ("grpc.http2.min_ping_interval_without_data_ms", 5_000),
         ]
         self.channel = grpc.insecure_channel(args.server, options=opts)
         self.stub = services_pb2_grpc.AsyncInferenceStub(self.channel)
