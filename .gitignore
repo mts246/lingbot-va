@@ -1,1 +1,35 @@
+# ---- python ----
 *.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+.venv/
+.env
+
+# ---- editor ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ---- project artifacts ----
+train_out/
+logs/
+visualization/
+wandb/
+data/
+.git_disabled/
+
+# ---- scratch ----
+pids.txt
+cmd.txt
+
+# ---- large / binary ----
+*.pth
+*.safetensors
+*.ckpt
+*.bin
+*.mp4
+*.mkv
+*.avi

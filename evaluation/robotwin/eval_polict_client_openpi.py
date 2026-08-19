@@ -6,7 +6,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import cv2
 from pathlib import Path
 
-robowin_root = Path("/path/to/your/robowin")
+robowin_root = Path("/m2v_intern/genghaotian/RoboTwin_clean")
 if str(robowin_root) not in sys.path:
     sys.path.insert(0, str(robowin_root))
 
@@ -30,7 +30,7 @@ import pdb
 from evaluation.robotwin.geometry import euler2quat
 import numpy as np
 
-from description.utils.generate_episode_instructions import *
+from description.utils.generate_episode_instructions import generate_episode_descriptions
 import traceback
 
 import imageio
@@ -42,6 +42,7 @@ from pathlib import Path
 
 from evaluation.robotwin.websocket_client_policy import WebsocketClientPolicy
 from evaluation.robotwin.test_render import Sapien_TEST
+from evaluation.robotwin.stage_manager import create_stage_based_system, StageManager
 
 def write_json(data: dict, fpath: Path) -> None:
     """Write data to a JSON file.
@@ -202,6 +203,7 @@ def save_comparison_video(real_obs_list, imagined_video, action_history, save_pa
     else:
         n_imagined = 0
     n_frames = n_real # Based on real observation frames
+    has_action_history = action_history is not None and len(action_history) > 0
     
     print(f"Saving video: Real {n_real} frames, Imagined {n_imagined} frames...")
 
@@ -245,19 +247,33 @@ def save_comparison_video(real_obs_list, imagined_video, action_history, save_pa
 
             h = int(img_frame.shape[0] * target_width / img_frame.shape[1])
             row_imagined = cv2.resize(img_frame, (target_width, h))
+            row_imagined_title = "Imagined Video Stream"
+        elif has_action_history:
+            action_step_idx = min(i, len(action_history) - 1)
+            row_imagined = visualize_action_step(action_history, action_step_idx)
+            h = int(row_imagined.shape[0] * target_width / row_imagined.shape[1])
+            row_imagined = cv2.resize(row_imagined, (target_width, h))
+            row_imagined_title = "Action History"
         else:
             row_imagined = np.zeros((300, target_width, 3), dtype=np.uint8)
-            cv2.putText(row_imagined, "Coming soon", (target_width//2 - 100, 150), 
+            cv2.putText(row_imagined, "No imagined video or action history", (target_width//2 - 260, 150), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (100, 100, 100), 2)
+            row_imagined_title = "Action History"
 
         row_imagined = np.ascontiguousarray(row_imagined)
-        row_imagined = add_title_bar(row_imagined, "Imagined Video Stream")
+        row_imagined = add_title_bar(row_imagined, row_imagined_title)
         full_frame = np.vstack([row_real, row_imagined])
         full_frame = np.ascontiguousarray(full_frame)
         final_frames.append(full_frame)
 
     imageio.mimsave(save_path, final_frames, fps=fps)
     print(f"Combined video saved to: {save_path}")
+
+    if has_action_history:
+        action_img_path = Path(save_path).with_name(f"{Path(save_path).stem}_action_history.png")
+        action_img = visualize_action_step(action_history, len(action_history) - 1, window=len(action_history))
+        imageio.imwrite(action_img_path, action_img)
+        print(f"Final action history image saved to: {action_img_path}")
 
 
 def class_decorator(task_name):
@@ -309,6 +325,42 @@ def main(usr_args):
     save_dir = None
     video_save_dir = None
     video_size = None
+    
+    # 🚀 加载阶段式执行配置
+    enable_stage_based = usr_args.get("enable_stage_based", False)
+    stage_config = None
+    #import ipdb;ipdb.set_trace()
+    if enable_stage_based:
+        stage_config_path = usr_args.get("stage_config_path", 
+                                         "./evaluation/robotwin/stage_config.yaml")
+        if os.path.exists(stage_config_path):
+            with open(stage_config_path, "r", encoding="utf-8") as f:
+                stage_yaml = yaml.load(f.read(), Loader=yaml.FullLoader)
+            
+            # 从环境变量读取 API keys（如果配置文件中未设置）
+            llm_api_key = stage_yaml.get('llm', {}).get('api_key')
+            if not llm_api_key or llm_api_key.startswith('YOUR_'):
+                llm_api_key = os.getenv('DEEPSEEK_API_KEY')
+            
+            vlm_api_key = stage_yaml.get('vlm', {}).get('api_key')
+            if not vlm_api_key or vlm_api_key.startswith('YOUR_'):
+                vlm_api_key = os.getenv('DASHSCOPE_API_KEY') or os.getenv('OPENAI_API_KEY')
+            
+            stage_config = {
+                'llm_api_key': llm_api_key,
+                'vlm_api_key': vlm_api_key,
+                'llm_base_url': stage_yaml.get('llm', {}).get('base_url', 'https://api.deepseek.com/v1'),
+                'vlm_base_url': stage_yaml.get('vlm', {}).get('base_url', 'https://dashscope.aliyuncs.com/compatible-mode/v1'),
+                'vlm_model': stage_yaml.get('vlm', {}).get('model', 'qwen3-vl-plus'),
+                'max_stages': stage_yaml.get('stage_manager', {}).get('max_stages', 5),
+                'completion_threshold': stage_yaml.get('stage_manager', {}).get('completion_threshold', 0.7),
+                'check_frequency': stage_yaml.get('stage_manager', {}).get('check_frequency', 5),
+            }
+            print(f"\n✓ Stage-based execution config loaded from: {stage_config_path}")
+        else:
+            print(f"\n⚠️  Stage config file not found: {stage_config_path}")
+            print("⚠️  Stage-based execution disabled")
+            enable_stage_based = False
 
     with open(f"./task_config/{task_config}.yml", "r", encoding="utf-8") as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
@@ -327,7 +379,8 @@ def main(usr_args):
     def get_embodiment_file(embodiment_type):
         robot_file = _embodiment_types[embodiment_type]["file_path"]
         if robot_file is None:
-            raise "No embodiment files"
+            # codeflicker-fix: ERROR_HANDLING-Issue-002/29fo7pz1xvex042gicgl
+            raise ValueError("No embodiment files")
         return robot_file
 
     with open(CONFIGS_PATH + "_camera_config.yml", "r", encoding="utf-8") as f:
@@ -383,21 +436,36 @@ def main(usr_args):
     print("\033[94mWrist Camera Config:\033[0m " + str(args["camera"]["wrist_camera_type"]) + f", " +
           str(args["camera"]["collect_wrist_camera"]))
     print("\033[94mEmbodiment Config:\033[0m " + embodiment_name)
+    
+    if enable_stage_based:
+        print("\033[96m🚀 Stage-Based Execution: ENABLED\033[0m")
+        print(f"  - Max Stages: {stage_config['max_stages']}")
+        print(f"  - Completion Threshold: {stage_config['completion_threshold']}")
+        print(f"  - Check Frequency: {stage_config['check_frequency']} steps")
+        print(f"  - VLM Model: {stage_config['vlm_model']}")
+    
     print("\n==================================")
 
+    print("[debug] before class_decorator", flush=True)
     TASK_ENV = class_decorator(args["task_name"])
+    print("[debug] after class_decorator", flush=True)
     args["policy_name"] = policy_name
     usr_args["left_arm_dim"] = len(args["left_embodiment_config"]["arm_joints_name"][0])
     usr_args["right_arm_dim"] = len(args["right_embodiment_config"]["arm_joints_name"][1])
 
     seed = usr_args["seed"]
 
-    st_seed = 10000 * (1 + seed)
+    if usr_args.get("start_seed") is not None:
+        st_seed=usr_args["start_seed"]
+    else:
+        st_seed = 10000 * (1 + seed)
     suc_nums = []
     test_num = usr_args["test_num"]
 
-    
-    model = WebsocketClientPolicy(port=usr_args['port'])
+    print("[debug] before websocket connect", flush=True)
+    #model = WebsocketClientPolicy(port=usr_args['port'])
+    model = WebsocketClientPolicy(host="127.0.0.1", port=usr_args["port"])
+    print("[debug] after websocket connect", flush=True)
 
     st_seed, suc_num = eval_policy(task_name,
                                    TASK_ENV,
@@ -409,7 +477,9 @@ def main(usr_args):
                                    instruction_type=instruction_type,
                                    save_visualization=True,
                                    video_guidance_scale=video_guidance_scale,
-                                   action_guidance_scale=action_guidance_scale)
+                                   action_guidance_scale=action_guidance_scale,
+                                   enable_stage_based=enable_stage_based,
+                                   stage_config=stage_config)
     suc_nums.append(suc_num)
 
     file_path = os.path.join(save_dir, f"_result.txt")
@@ -428,6 +498,81 @@ def format_obs(observation, prompt):
                 "observation.state": observation["joint_action"]["vector"],
                 "task": prompt,
             }
+
+
+def format_eef_action_from_obs(observation):
+    """Build a 16D action-like vector from current dual-arm EEF pose and gripper state."""
+    return np.array(
+        observation["endpose"]["left_endpose"]
+        + [observation["endpose"]["left_gripper"]]
+        + observation["endpose"]["right_endpose"]
+        + [observation["endpose"]["right_gripper"]],
+        dtype=np.float64,
+    )
+
+
+def save_expert_visualization(TASK_ENV, args, st_seed, task_name, prompt, expert_obs_list, expert_action_history):
+    if not expert_obs_list:
+        print("[expert vis] No expert frames collected, skip saving visualization.")
+        return
+
+    vis_dir = Path(args['save_root']) / f'stseed-{st_seed}' / 'expert_visualization' / task_name
+    vis_dir.mkdir(parents=True, exist_ok=True)
+    safe_prompt = prompt.replace(' ', '_').replace('/', '_')
+    video_name = f"{TASK_ENV.test_num}_{safe_prompt}_{TASK_ENV.plan_success and TASK_ENV.check_success()}_expert.mp4"
+    out_img_file = vis_dir / video_name
+    save_comparison_video(
+        real_obs_list=expert_obs_list,
+        imagined_video=None,
+        action_history=expert_action_history,
+        save_path=str(out_img_file),
+        fps=15,
+    )
+
+
+def play_once_with_expert_recorder(TASK_ENV, prompt, sample_every=10):
+    """Run expert play_once and collect visualization frames during execution.
+
+    The expert demos move the robot through dense internal control loops. Instead
+    of modifying every task file, this temporarily wraps _update_render so we can
+    sample multi-view observations while play_once is executing.
+    """
+    expert_obs_list = []
+    expert_action_history = []
+    original_update_render = TASK_ENV._update_render
+    original_get_obs = TASK_ENV.get_obs
+    state = {"cnt": 0, "collecting": False}
+
+    def safe_collect():
+        if state["collecting"]:
+            return
+        state["collecting"] = True
+        try:
+            observation = original_get_obs()
+            expert_obs_list.append(format_obs(observation, prompt))
+            expert_action_history.append(format_eef_action_from_obs(observation))
+        except Exception as e:
+            print(f"[expert vis] Skip one frame due to collection error: {e}")
+        finally:
+            state["collecting"] = False
+
+    def wrapped_update_render(*wrapper_args, **wrapper_kwargs):
+        ret = original_update_render(*wrapper_args, **wrapper_kwargs)
+        if not state["collecting"]:
+            state["cnt"] += 1
+            if state["cnt"] % sample_every == 0:
+                safe_collect()
+        return ret
+
+    TASK_ENV._update_render = wrapped_update_render
+    try:
+        safe_collect()
+        episode_info = TASK_ENV.play_once()
+        safe_collect()
+    finally:
+        TASK_ENV._update_render = original_update_render
+
+    return episode_info, expert_obs_list, expert_action_history
 
 def add_eef_pose(new_pose, init_pose):
     new_pose_R = R.from_quat(new_pose[3:7][None])
@@ -451,10 +596,40 @@ def eval_policy(task_name,
                 instruction_type=None,
                 save_visualization=False,
                 video_guidance_scale=5.0,
-                action_guidance_scale=5.0):
+                action_guidance_scale=5.0,
+                enable_stage_based=False,
+                stage_config=None):
+    """
+    Args:
+        enable_stage_based: 是否启用阶段式执行
+        stage_config: 阶段配置字典，包含 'llm_api_key', 'vlm_api_key', 'check_frequency' 等
+    """
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
-
+    #import ipdb;ipdb.set_trace()
+    # 初始化阶段式执行系统（如果启用）
+    stage_manager = None
+    stage_checker = None
+    if enable_stage_based and stage_config:
+        print("\n" + "="*60)
+        print("🚀 STAGE-BASED EXECUTION MODE ENABLED")
+        print("="*60)
+        try:
+            task_decomposer, stage_checker, create_manager = create_stage_based_system(
+                llm_api_key=stage_config.get('llm_api_key', os.getenv('DEEPSEEK_API_KEY')),
+                vlm_api_key=stage_config.get('vlm_api_key', os.getenv('DASHSCOPE_API_KEY')),
+                llm_base_url=stage_config.get('llm_base_url', 'https://api.deepseek.com/v1'),
+                vlm_base_url=stage_config.get('vlm_base_url', 'https://dashscope.aliyuncs.com/compatible-mode/v1'),
+                vlm_model=stage_config.get('vlm_model', 'qwen3-vl-plus'),
+                completion_threshold=stage_config.get('completion_threshold', 0.7)
+            )
+            print("✓ Stage-based system initialized successfully")
+        except Exception as e:
+            print(f"⚠️  Failed to initialize stage-based system: {e}")
+            print("⚠️  Falling back to standard execution mode")
+            enable_stage_based = False
+    
+    # codeflicker-fix: DEBUGGING-Issue-001/29fo7pz1xvex042gicgl
     expert_check = True
     TASK_ENV.suc = 0
     TASK_ENV.test_num = 0
@@ -468,8 +643,10 @@ def eval_policy(task_name,
     clear_cache_freq = args["clear_cache_freq"]
 
     args["eval_mode"] = True
+    active_ffmpeg = False
 
     while succ_seed < test_num:
+        print(f"now seed: {now_seed}, success seed: {succ_seed}")
         render_freq = args["render_freq"]
         args["render_freq"] = 0
 
@@ -477,6 +654,24 @@ def eval_policy(task_name,
             try:
                 TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
                 episode_info = TASK_ENV.play_once()
+                '''
+                expert_prompt = f"Expert_demonstration_seed_{now_seed}"
+                episode_info, expert_obs_list, expert_action_history = play_once_with_expert_recorder(
+                    TASK_ENV,
+                    prompt=expert_prompt,
+                    sample_every=1,
+                )
+                if TASK_ENV.plan_success and TASK_ENV.check_success():
+                    save_expert_visualization(
+                        TASK_ENV=TASK_ENV,
+                        args=args,
+                        st_seed=st_seed,
+                        task_name=task_name,
+                        prompt=expert_prompt,
+                        expert_obs_list=expert_obs_list,
+                        expert_action_history=expert_action_history,
+                    )
+                '''
                 TASK_ENV.close_env()
             except UnStableError as e:
                 TASK_ENV.close_env()
@@ -500,7 +695,7 @@ def eval_policy(task_name,
             continue
 
         args["render_freq"] = render_freq
-
+        #import ipdb; ipdb.set_trace()
         TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
         episode_info_list = [episode_info["info"]]
         results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
@@ -508,6 +703,8 @@ def eval_policy(task_name,
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
         if TASK_ENV.eval_video_path is not None:
+            # codeflicker-fix: RESOURCE_MANAGEMENT-Issue-003/29fo7pz1xvex042gicgl
+            active_ffmpeg = True
             ffmpeg = subprocess.Popen(
                 [
                     "ffmpeg",
@@ -539,28 +736,66 @@ def eval_policy(task_name,
         succ = False
 
         prompt = TASK_ENV.get_instruction()
-        ret = model.infer(dict(reset = True, prompt=prompt, save_visualization=save_visualization))
+        #prompt = "Move the left arm close to the bottle"
+        print(f"instruction: {prompt}")
+        
+        # 🚀 初始化阶段管理器（如果启用）
+        active_model_prompt = prompt
+        if enable_stage_based:
+            try:
+                stage_manager = create_manager(
+                    complex_prompt=prompt,
+                    max_stages=stage_config.get('max_stages', 5)
+                )
+                print(f"✓ Task decomposed into {len(stage_manager.stages)} stages")
+                if stage_manager and not stage_manager.is_all_completed():
+                    active_model_prompt = stage_manager.get_current_prompt()
+            except Exception as e:
+                print(f"⚠️  Stage decomposition failed: {e}")
+                print("⚠️  Using original prompt without decomposition")
+                enable_stage_based = False
+
+        # codeflicker-fix: PROMPT_ROUTING-Issue-001/p6kpzqyzn2nsvwm8izrl
+        # The VA server encodes text only on reset, so reset with the active stage prompt.
+        ret = model.infer(dict(reset = True, prompt=active_model_prompt, save_visualization=save_visualization))#reset
         
         first = True
         full_obs_list = []
         gen_video_list = []
         full_action_history = []
-
-        initial_obs = TASK_ENV.get_obs() 
+        
+        # 阶段检查相关变量
+        check_frequency = stage_config.get('check_frequency', 1) if stage_config else 1
+        steps_since_last_check = 0
+        stage_start_step = 0
+        skip_kv_cache_update = False
+        #import ipdb;ipdb.set_trace() #
+        initial_obs = TASK_ENV.get_obs()  # dict_keys(['observation', 'pointcloud', 'joint_action', 'endpose'])
         inint_eef_pose = initial_obs['endpose']['left_endpose'] + \
         [initial_obs['endpose']['left_gripper']] + \
         initial_obs['endpose']['right_endpose'] + \
         [initial_obs['endpose']['right_gripper']]
         inint_eef_pose = np.array(inint_eef_pose, dtype=np.float64)
-        initial_formatted_obs = format_obs(initial_obs, prompt)
+        initial_formatted_obs = format_obs(initial_obs, active_model_prompt)
         full_obs_list.append(initial_formatted_obs)
         first_obs = None
+        
+        #    import ipdb;ipdb.set_trace()
         while TASK_ENV.take_action_cnt<TASK_ENV.step_lim:
+            print(f"step: {TASK_ENV.take_action_cnt}",flush=True)
+            
+            # 🚀 获取当前阶段的 prompt（如果启用阶段式执行）
+            if enable_stage_based and stage_manager and not stage_manager.is_all_completed():
+                current_stage_prompt = stage_manager.get_current_prompt()
+                print(f"  [Stage {stage_manager.current_stage_idx + 1}/{len(stage_manager.stages)}]: {current_stage_prompt}")
+            else:
+                current_stage_prompt = prompt
+            
             if first:
                 observation = TASK_ENV.get_obs()
-                first_obs = format_obs(observation, prompt)
+                first_obs = format_obs(observation, current_stage_prompt)
 
-            ret = model.infer(dict(obs=first_obs, prompt=prompt, save_visualization=save_visualization, video_guidance_scale=video_guidance_scale, action_guidance_scale=action_guidance_scale)) #(TASK_ENV, model, observation)
+            ret = model.infer(dict(obs=first_obs, prompt=current_stage_prompt, update_prompt=enable_stage_based, save_visualization=save_visualization, video_guidance_scale=video_guidance_scale, action_guidance_scale=action_guidance_scale)) #(TASK_ENV, model, observation)
             action = ret['action']
             if 'video' in ret:
                 imagined_video = ret['video']
@@ -571,6 +806,9 @@ def eval_policy(task_name,
             action_per_frame = action.shape[2] // 4
 
             start_idx = 1 if first else 0
+            max_frames_to_execute = 1
+            end_idx = min(action.shape[1], start_idx + max_frames_to_execute)
+            executed_action = action[:, start_idx:end_idx, :]
             for i in range(start_idx, action.shape[1]):
                 for j in range(action.shape[2]):
                     raw_action_step = action[:, i, j].flatten() 
@@ -598,14 +836,93 @@ def eval_policy(task_name,
                         raise NotImplementedError
                     TASK_ENV.take_action(ee_action, action_type='ee')
                    
+                    obs = format_obs(TASK_ENV.get_obs(), current_stage_prompt)
+                    full_obs_list.append(obs)
                     if (j+1) % action_per_frame == 0:
-                        obs = format_obs(TASK_ENV.get_obs(), prompt)
-                        full_obs_list.append(obs)
                         key_frame_list.append(obs)
                     
             first = False
-
-            model.infer(dict(obs = key_frame_list, compute_kv_cache=True, imagine=False, save_visualization=save_visualization, state=action))
+            steps_since_last_check += 1
+            
+            # 🚀 阶段完成检查
+            if enable_stage_based and stage_manager and stage_checker:
+                if not stage_manager.is_all_completed() and steps_since_last_check >= check_frequency:
+                    steps_since_last_check = 0
+                    current_stage = stage_manager.get_current_stage()
+                    
+                    print(f"\n  🔍 Checking stage {current_stage['stage_id']} completion...")
+                    try:
+                        check_log_dir = (
+                            Path(args['save_root'])
+                            / f'stseed-{st_seed}'
+                            / 'stage_checks'
+                            / task_name
+                            / f'episode_{TASK_ENV.test_num:04d}'
+                            / f"check_{TASK_ENV.take_action_cnt:04d}_stage_{current_stage['stage_id']}"
+                        )
+                        is_completed, reasoning, confidence = stage_checker.check_stage_completion(
+                            obs=obs,
+                            stage_info=current_stage,
+                            log_dir=check_log_dir,
+                            metadata={
+                                "task_name": task_name,
+                                "episode": int(TASK_ENV.test_num),
+                                "seed": int(now_seed),
+                                "step": int(TASK_ENV.take_action_cnt),
+                                "stage_index": int(stage_manager.current_stage_idx),
+                                "total_stages": int(len(stage_manager.stages)),
+                                "original_prompt": prompt,
+                                "current_stage_prompt": current_stage_prompt,
+                            },
+                        )
+                        print(f"  📝 Check artifacts saved to: {check_log_dir}")
+                        
+                        if is_completed and confidence >= stage_manager.completion_threshold:
+                            print(f"  ✓ Stage {current_stage['stage_id']} COMPLETED (confidence: {confidence:.2f})")
+                            print(f"    Reasoning: {reasoning[:100]}...")
+                            
+                            # 记录阶段信息
+                            stage_duration = TASK_ENV.take_action_cnt - stage_start_step
+                            print(f"    Duration: {stage_duration} steps")
+                            
+                            if stage_manager.has_next_stage():
+                                stage_manager.advance_to_next_stage(reasoning, confidence)
+                                stage_start_step = TASK_ENV.take_action_cnt
+                                next_stage_prompt = stage_manager.get_current_prompt()
+                                active_model_prompt = next_stage_prompt
+                                # codeflicker-fix: PROMPT_ROUTING-Issue-002/p6kpzqyzn2nsvwm8izrl
+                                # Re-encode prompt embeddings after switching stages; non-reset inference ignores obs['prompt'].
+                                model.infer(dict(reset=True, prompt=next_stage_prompt, save_visualization=save_visualization))
+                                steps_since_last_check = 0
+                                # codeflicker-fix: KV_CACHE-Issue-003/nvd4ldkw2ymm8351bm0f
+                                # Do not compute KV cache immediately after a reset: init_latent is rebuilt by the next infer call.
+                                key_frame_list = []
+                                skip_kv_cache_update = True
+                                current_stage_prompt = next_stage_prompt
+                                # 更新 first_obs 为新阶段
+                                first = True
+                            else:
+                                print("\n  🎉 All stages completed! Task finished.")
+                                stage_manager.advance_to_next_stage(reasoning, confidence)
+                                succ = True
+                                break
+                        else:
+                            print(f"  ⏳ Stage {current_stage['stage_id']} in progress (confidence: {confidence:.2f})")
+                    
+                    except Exception as e:
+                        print(f"  ⚠️  Stage completion check failed: {e}")
+            
+            #action=action*0
+            if skip_kv_cache_update:
+                print("  ⚠️  Skip KV cache update immediately after stage reset.")
+                skip_kv_cache_update = False
+            elif key_frame_list:
+                kv_cache_request = dict(obs=key_frame_list, compute_kv_cache=True, imagine=False, save_visualization=save_visualization, state=action)
+                if enable_stage_based:
+                    kv_cache_request["prompt"] = current_stage_prompt
+                model.infer(kv_cache_request)
+            else:
+                print("  ⚠️  Skip KV cache update because no key frames were collected in this chunk.")
   
             if TASK_ENV.eval_success:
                 succ = True
@@ -623,8 +940,17 @@ def eval_policy(task_name,
             save_path=str(out_img_file),
             fps=15 # Suggest adjusting fps based on simulation step
         )
-        if TASK_ENV.eval_video_path is not None:
+        
+        # 🚀 保存阶段执行摘要
+        if enable_stage_based and stage_manager:
+            stage_summary = stage_manager.get_progress_summary()
+            stage_summary_path = vis_dir / f"{TASK_ENV.test_num}_stage_summary.json"
+            write_json(stage_summary, stage_summary_path)
+            print(f"\n📊 Stage execution summary saved to: {stage_summary_path}")
+        
+        if TASK_ENV.eval_video_path is not None and active_ffmpeg:
             TASK_ENV._del_eval_video_ffmpeg()
+            active_ffmpeg = False
 
         if succ:
             TASK_ENV.suc += 1
@@ -667,6 +993,15 @@ def parse_args_and_config():
     parser.add_argument("--video_guidance_scale", type=float, default=5.0)
     parser.add_argument("--action_guidance_scale", type=float, default=5.0)
     parser.add_argument("--test_num", type=int, default=100)
+    parser.add_argument("--start_seed",type=int,default=10000)
+    
+    # 🚀 Stage-based execution arguments
+    parser.add_argument("--enable_stage_based", action='store_true', 
+                        help='Enable stage-based execution with LLM task decomposition and VLM stage completion checking')
+    parser.add_argument("--stage_config_path", type=str, 
+                        default="./evaluation/robotwin/stage_config.yaml",
+                        help='Path to stage-based execution config file')
+    
     args = parser.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -688,6 +1023,11 @@ def parse_args_and_config():
     if args.overrides:
         overrides = parse_override_pairs(args.overrides)
         config.update(overrides)
+    
+    # Add stage-based execution config to the main config. If these were passed
+    # after --overrides, prefer the override values parsed above.
+    config['enable_stage_based'] = bool(config.get('enable_stage_based', args.enable_stage_based))
+    config['stage_config_path'] = config.get('stage_config_path', args.stage_config_path)
 
     return config
 

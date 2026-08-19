@@ -9,9 +9,10 @@ task_groups=(
   "stack_bowls_two place_a2b_right stamp_seal place_object_basket handover_mic place_bread_skillet stack_blocks_two place_cans_plasticbox"
   "click_alarmclock blocks_ranking_size place_phone_stand place_can_basket place_object_scale place_a2b_left grab_roller place_dual_shoes"
   "place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb"
+  "hanging_mug move_stapler_pad open_microwave stack_bowls_three turn_switch place_object_basket press_stapler move_can_pot"
 )
 
-save_root=${1:-'./results'}
+save_root=${1:-'./results/test'}
 task_name=${2:-"adjust_bottle"}
 
 policy_name=ACT
@@ -34,7 +35,7 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 python -m evaluation.robotwin.eval_polict_cli
     --save_root ${save_root} \
     --video_guidance_scale 5 \
     --action_guidance_scale 1 \
-    --test_num 100 \
+    --test_num 3 \
     --port ${PORT}
 
 

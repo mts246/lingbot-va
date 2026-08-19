@@ -827,20 +827,20 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         if train_mode:
             return self.forward_train(input_dict)
         if action_mode:  # action input emb
-            latent_hidden_states = rearrange(input_dict['noisy_latents'],
+            latent_hidden_states = rearrange(input_dict['noisy_latents'], # [2, 30, 2, 16, 1]
                                              'b c f h w -> b (f h w) c')
-            latent_hidden_states = self.action_embedder(
+            latent_hidden_states = self.action_embedder( # [2, 32, 3072]
                 latent_hidden_states)  # B L1 C
         else:  # latent input emb
-            latent_hidden_states = rearrange(
-                input_dict['noisy_latents'],
+            latent_hidden_states = rearrange( # [2,240,192]
+                input_dict['noisy_latents'], #[2, 48, 2, 24, 20]
                 'b c (f p1) (h p2) (w p3) -> b (f h w) (c p1 p2 p3)',
                 p1=self.patch_size[0],
                 p2=self.patch_size[1],
                 p3=self.patch_size[2])
-            latent_hidden_states = self.patch_embedding_mlp(
+            latent_hidden_states = self.patch_embedding_mlp( # [B,L,192]->[B,L,3072]
                 latent_hidden_states)
-        text_hidden_states = self.condition_embedder.text_embedder(
+        text_hidden_states = self.condition_embedder.text_embedder( # [2,512,3072]
             input_dict["text_emb"])  # B L2 C
 
         latent_grid_id = input_dict['grid_id']
@@ -848,7 +848,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         pach_scale_h, pach_scale_w = (1, 1) if action_mode else (
             self.patch_size[1], self.patch_size[2])
 
-        latent_time_steps = torch.repeat_interleave(
+        latent_time_steps = torch.repeat_interleave( # [2,240(L)]
             input_dict['timesteps'],
             (input_dict['noisy_latents'].shape[-2] // pach_scale_h) *
             (input_dict['noisy_latents'].shape[-1] // pach_scale_w), dim=1)  # L
@@ -857,12 +857,12 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
             latent_time_steps, dtype=latent_hidden_states.dtype)
         timestep_proj = timestep_proj.unflatten(2, (6, -1))  # B L 6 C
 
-        for block in self.blocks:
-            latent_hidden_states = block(latent_hidden_states,
-                                         text_hidden_states,
-                                         timestep_proj,
-                                         rotary_emb,
-                                         update_cache=update_cache,
+        for block in self.blocks: # 30个
+            latent_hidden_states = block(latent_hidden_states, # [B, L, dim]  当前 token 表征
+                                         text_hidden_states, # [B, L_txt, dim]  文本条件
+                                         timestep_proj, # [B, L, 6, dim]  per-token 的 6 组 AdaLN 参数
+                                         rotary_emb, # [2, L, 1, C]  RoPE 位置编码
+                                         update_cache=update_cache, #是否写入KV cache
                                          cache_name=cache_name)
         temb_scale_shift_table = self.scale_shift_table[None] + temb[:, :, None, ...]
         shift, scale = rearrange(temb_scale_shift_table,

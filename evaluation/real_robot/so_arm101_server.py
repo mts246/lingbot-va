@@ -294,7 +294,7 @@ class LingBotVAServicer(services_pb2_grpc.AsyncInferenceServicer):
             # by wan_va_server._reset() at construction. Subsequent sessions
             # get their own link inside SendPolicyInstructions.
             try:
-                latent_dir = Path(self.va.exp_save_root)
+                latent_dir = Path(self.va.exp_save_root).resolve()
                 (self.dump_dir / "latent_dir.txt").write_text(
                     str(latent_dir) + "\n")
                 link = self.dump_dir / "latents"
@@ -335,7 +335,7 @@ class LingBotVAServicer(services_pb2_grpc.AsyncInferenceServicer):
                 # Both a plain-text pointer and a relative symlink are written
                 # so `decode_dumped_latents.py --latent-dir` can find them.
                 try:
-                    latent_dir = Path(self.va.exp_save_root)
+                    latent_dir = Path(self.va.exp_save_root).resolve()
                     (self.dump_dir / "latent_dir.txt").write_text(
                         str(latent_dir) + "\n")
                     link = self.dump_dir / "latents"

@@ -57,7 +57,7 @@ class VA_Server:
             extra_one_step=True)
         self.scheduler.set_timesteps(1000, training=True)
         self.action_scheduler.set_timesteps(1000, training=True)
-
+        #import ipdb;ipdb.set_trace()
         self.vae = load_vae(
             os.path.join(job_config.wan22_pretrained_model_name_or_path,
                          'vae'),
@@ -303,7 +303,7 @@ class VA_Server:
                            dtype=torch.float32,
                            device=self.device) * action_t,
                 'grid_id':
-                get_mesh_id(action_model_input.shape[-3],
+                get_mesh_id(action_model_input.shape[-3], # 3D patch id 
                             action_model_input.shape[-2],
                             action_model_input.shape[-1],
                             1,
@@ -322,7 +322,7 @@ class VA_Server:
                                                           action_mask] *= 0
         return input_dict
 
-    def _encode_obs(self, obs):
+    def _encode_obs(self, obs): # vae encode输入
         images = obs['obs']
         if not isinstance(images, list):
             images = [images]
@@ -346,17 +346,18 @@ class VA_Server:
                                             mode='bilinear',
                                             align_corners=False).unsqueeze(0)
             videos.append(history_video_k)
-
+        #import ipdb
+        #ipdb.set_trace()
         if self.env_type == 'robotwin_tshape':
-            videos_high = videos[0] / 255.0 * 2.0 - 1.0
-            videos_left_and_right = torch.cat(videos[1:],
+            videos_high = videos[0] / 255.0 * 2.0 - 1.0 # [1, 3, (1/4/8), 256, 320]
+            videos_left_and_right = torch.cat(videos[1:], # [2, 3, 1, 128, 160]
                                               dim=0) / 255.0 * 2.0 - 1.0
             vae_device = next(self.streaming_vae.vae.parameters()).device
-            enc_out_high = self.streaming_vae.encode_chunk(
+            enc_out_high = self.streaming_vae.encode_chunk( # [1, 96, 1, 16, 20]
                 videos_high.to(vae_device).to(self.dtype))
-            enc_out_left_and_right = self.streaming_vae_half.encode_chunk(
+            enc_out_left_and_right = self.streaming_vae_half.encode_chunk( #[2, 96, 1, 8, 10]
                 videos_left_and_right.to(vae_device).to(self.dtype))
-            enc_out = torch.cat([
+            enc_out = torch.cat([ # [1, 96, 1, 24, 20]
                 torch.cat(enc_out_left_and_right.split(1, dim=0), dim=-1),
                 enc_out_high
             ],
@@ -372,7 +373,7 @@ class VA_Server:
         latents_std = torch.tensor(self.vae.config.latents_std).to(mu.device)
         mu_norm = self.normalize_latents(mu, latents_mean, 1.0 / latents_std)
         video_latent = torch.cat(mu_norm.split(1, dim=0), dim=-1)
-        return video_latent.to(self.device)
+        return video_latent.to(self.device) #[1, 48, 1, 24, 20]
 
     def _reset(self, prompt=None):
         logger.info('Reset.')
@@ -386,7 +387,8 @@ class VA_Server:
 
         self.action_per_frame = self.job_config.action_per_frame
         self.height, self.width = self.job_config.height, self.job_config.width
-
+        #import ipdb
+        #ipdb.set_trace()
         if self.env_type == 'robotwin_tshape':
             self.latent_height, self.latent_width = (
                 (self.height // 16) * 3) // 2, self.width // 16
@@ -435,25 +437,25 @@ class VA_Server:
                 dtype=self.dtype,
             )
 
-        self.exp_name = f"{prompt}_{time.strftime('%Y%m%d_%H%M%S')}" if prompt else "default"
+        self.exp_name = f"{self.job_config.num_inference_steps}_{self.job_config.action_num_inference_steps}_{prompt}_{time.strftime('%Y%m%d_%H%M%S')}" if prompt else "default"
         self.exp_save_root = os.path.join(self.save_root, 'real', self.exp_name)
         os.makedirs(self.exp_save_root, exist_ok=True)
         torch.cuda.empty_cache()
 
     def _infer(self, obs, frame_st_id=0):
-        frame_chunk_size = self.job_config.frame_chunk_size
+        frame_chunk_size = self.job_config.frame_chunk_size #2
         if frame_st_id == 0:
-            init_latent = self._encode_obs(obs)
+            init_latent = self._encode_obs(obs) #[1, 48, 1, 24, 20]
             self.init_latent = init_latent
-
-        latents = torch.randn(1,
+        #import ipdb;ipdb.set_trace()
+        latents = torch.randn(1, # [1, 48, 2, 24, 20]
                               48,
                               frame_chunk_size,
                               self.latent_height,
                               self.latent_width,
                               device=self.device,
                               dtype=self.dtype)
-        actions = torch.randn(1,
+        actions = torch.randn(1, # [1, 30, 2, 16, 1]
                               self.job_config.action_dim,
                               frame_chunk_size,
                               self.action_per_frame,
@@ -461,8 +463,8 @@ class VA_Server:
                               device=self.device,
                               dtype=self.dtype)
 
-        video_inference_step = self.job_config.num_inference_steps
-        action_inference_step = self.job_config.action_num_inference_steps
+        video_inference_step = self.job_config.num_inference_steps # 25
+        action_inference_step = self.job_config.action_num_inference_steps # 50
         video_step = self.job_config.video_exec_step
 
         self.scheduler.set_timesteps(video_inference_step)
@@ -488,6 +490,15 @@ class VA_Server:
             # 1. Video Generation Loop
             for i, t in enumerate(tqdm(timesteps)):
                 last_step = i == len(timesteps) - 1
+
+                if os.environ.get("DUMP_DENOISE", "0") == "1":
+                    t_val = int(t.item()) if torch.is_tensor(t) else int(t)
+                    save_async(
+                        latents.detach().float().cpu().clone(),
+                        os.path.join(
+                            self.exp_save_root,
+                            f'latents_{frame_st_id}_step{i:02d}_t{t_val:04d}.pt'))
+
                 latent_cond = init_latent[:, :, 0:1].to(
                     self.dtype) if frame_st_id == 0 else None
                 input_dict = self._prepare_latent_input(
@@ -498,7 +509,7 @@ class VA_Server:
                     latent_cond,
                     None,
                     frame_st_id=frame_st_id)
-
+                # [B,48,F,H,W]->[B,F*H*W,48]
                 video_noise_pred = self.transformer(
                     self._repeat_input_for_cfg(input_dict['latent_res_lst']),
                     update_cache=1 if last_step else 0,
@@ -506,15 +517,16 @@ class VA_Server:
                     action_mode=False)
 
                 if not last_step or video_step != -1:
-                    video_noise_pred = data_seq_to_patch(
+                    video_noise_pred = data_seq_to_patch( #[B*2,F*H*W,C]->[B*2,C,F,H,W]
                         self.job_config.patch_size, video_noise_pred,
                         frame_chunk_size, self.latent_height,
                         self.latent_width, batch_size=2 if self.use_cfg else 1)
                     if self.job_config.guidance_scale > 1:
+                        # CFG融合
                         video_noise_pred = video_noise_pred[1:] + self.job_config.guidance_scale * (video_noise_pred[:1] - video_noise_pred[1:])
                     else:
                         video_noise_pred = video_noise_pred[:1]
-                    latents = self.scheduler.step(video_noise_pred,
+                    latents = self.scheduler.step(video_noise_pred, #单步去噪
                                                   t,
                                                   latents,
                                                   return_dict=False)
@@ -574,11 +586,20 @@ class VA_Server:
         self.transformer.clear_pred_cache(self.cache_name)
         save_async(obs['obs'], os.path.join(self.exp_save_root, f'obs_data_{self.frame_st_id}.pt'))
         latent_model_input = self._encode_obs(obs)
+        if latent_model_input is None:
+            # codeflicker-fix: KV_CACHE-Issue-002/m5mje27t5cad8c5ntfjm
+            # Guard against empty key-frame lists after stage switches.
+            logger.warning("Skip KV cache update because encoded observation is None.")
+            return
         if self.frame_st_id == 0:
-            latent_model_input = torch.cat(
-                [self.init_latent, latent_model_input],
-                dim=2) if latent_model_input is not None else self.init_latent
-
+            if self.init_latent is not None:
+                latent_model_input = torch.cat([self.init_latent, latent_model_input], dim=2)
+            else:
+                # codeflicker-fix: KV_CACHE-Issue-004/nvd4ldkw2ymm8351bm0f
+                # After a stage reset, init_latent may be None until the next infer call.
+                logger.warning("Skip KV cache update because init_latent is None at frame_st_id 0.")
+                return
+        #import ipdb;ipdb.set_trace()
         action_model_input = self.preprocess_action(obs['state'])
         action_model_input = action_model_input.to(latent_model_input)
         logger.info(
@@ -604,7 +625,7 @@ class VA_Server:
         self.frame_st_id += latent_model_input.shape[2]
 
     @torch.no_grad()
-    def infer(self, obs):
+    def infer(self, obs): #暴露给客户端调用
         reset = obs.get('reset', False)
         prompt = obs.get('prompt', None)
         compute_kv_cache = obs.get('compute_kv_cache', False)
@@ -619,6 +640,20 @@ class VA_Server:
             self._compute_kv_cache(obs)
             return dict()
         else:
+            if obs.get('update_prompt', False) and prompt is not None:
+                # codeflicker-fix: PROMPT_ROUTING-Issue-005/tj3m2zahmn1e6niqn9si
+                # Keep legacy evaluation unchanged: only explicitly requested prompt updates re-encode embeddings.
+                self.prompt_embeds, self.negative_prompt_embeds = self.encode_prompt(
+                    prompt=prompt,
+                    negative_prompt=None,
+                    do_classifier_free_guidance=self.job_config.guidance_scale > 1,
+                    num_videos_per_prompt=1,
+                    prompt_embeds=None,
+                    negative_prompt_embeds=None,
+                    max_sequence_length=512,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
             logger.info(f"################# Infer One Chunk #################")
             action, _ = self._infer(obs, frame_st_id=self.frame_st_id)
             return dict(action=action)
@@ -675,7 +710,7 @@ class VA_Server:
         export_to_video(decoded_video, os.path.join(self.save_root, "demo.mp4"), fps=10)
 
 def run(args):    
-    
+    #import ipdb;ipdb.set_trace()
     config = VA_CONFIGS[args.config_name]
     port = config.port if args.port is None else args.port
     if args.save_root is not None:
@@ -687,7 +722,7 @@ def run(args):
     config.rank = rank
     config.local_rank = local_rank
     config.world_size = world_size
-    model = VA_Server(config)
+    model = VA_Server(config) #load 模型
     if config.infer_mode == 'i2va':
         logger.info(f"******************************USE I2AV mode******************************")
         model.generate()

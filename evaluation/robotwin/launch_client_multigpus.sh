@@ -2,28 +2,29 @@
 export LD_LIBRARY_PATH=/usr/lib64:/usr/lib:$LD_LIBRARY_PATH
 
 
-save_root=${1:-'./results'}
+save_root=${1:-'./results/action_one_clean'}
 
 # General parameters
 policy_name=ACT
-task_config=demo_clean
+task_config=${5:-'demo_clean'}
 train_config_name=0
 model_name=0
 seed=${3:-0}
-test_num=${4:-100}
+test_num=${4:-20}
 start_port=29556 
 num_gpus=8
 
-task_list_id=${2:-0}
+task_list_id=${2:-3}
 
 task_groups=(
-  "stack_bowls_three handover_block hanging_mug scan_object lift_pot put_object_cabinet stack_blocks_three place_shoe"
-  "adjust_bottle place_mouse_pad dump_bin_bigbin move_pillbottle_pad pick_dual_bottles shake_bottle place_fan turn_switch"
-  "shake_bottle_horizontally place_container_plate rotate_qrcode place_object_stand put_bottles_dustbin move_stapler_pad place_burger_fries place_bread_basket"
-  "pick_diverse_bottles open_microwave beat_block_hammer press_stapler click_bell move_playingcard_away open_laptop move_can_pot"
-  "stack_bowls_two place_a2b_right stamp_seal place_object_basket handover_mic place_bread_skillet stack_blocks_two place_cans_plasticbox"
-  "click_alarmclock blocks_ranking_size place_phone_stand place_can_basket place_object_scale place_a2b_left grab_roller place_dual_shoes"
-  "place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb"
+  "stack_bowls_three handover_block hanging_mug scan_object lift_pot put_object_cabinet stack_blocks_three place_shoe" #0
+  "adjust_bottle place_mouse_pad dump_bin_bigbin move_pillbottle_pad pick_dual_bottles shake_bottle place_fan turn_switch" #1
+  "shake_bottle_horizontally place_container_plate rotate_qrcode place_object_stand put_bottles_dustbin move_stapler_pad place_burger_fries place_bread_basket" #2
+  "pick_diverse_bottles open_microwave beat_block_hammer press_stapler click_bell move_playingcard_away open_laptop move_can_pot" #3
+  "stack_bowls_two place_a2b_right stamp_seal place_object_basket handover_mic place_bread_skillet stack_blocks_two place_cans_plasticbox" #4
+  "click_alarmclock blocks_ranking_size place_phone_stand place_can_basket place_object_scale place_a2b_left grab_roller place_dual_shoes" #5
+  "place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb place_empty_cup blocks_ranking_rgb" #6
+  "hanging_mug move_stapler_pad put_object_cabinet stack_bowls_three turn_switch place_object_basket press_stapler move_can_pot"
 )
 
 if (( task_list_id < 0 || task_list_id >= ${#task_groups[@]} )); then
@@ -36,7 +37,7 @@ read -r -a task_names <<< "${task_groups[$task_list_id]}"
 echo "task_list_id=$task_list_id"
 printf 'task_names (%d): %s\n' "${#task_names[@]}" "${task_names[*]}"
 
-log_dir="./logs"
+log_dir="./logs/action_one_clean"
 mkdir -p "$log_dir"
 
 echo -e "\033[32mLaunching ${#task_names[@]} tasks. GPUs assigned by mod ${num_gpus}, ports starting from ${start_port} incrementing.\033[0m"

@@ -1,0 +1,48 @@
+# Stage-based Execution Configuration
+# Author: genghaotian
+
+# LLM Configuration (用于任务分解)
+llm:
+  provider: "deepseek"
+  api_key: "YOUR_DEEPSEEK_API_KEY"  # 从环境变量 DEEPSEEK_API_KEY 读取
+  base_url: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+  temperature: 0.3
+  max_tokens: 2000
+
+# VLM Configuration (用于阶段完成判断)
+vlm:
+  # 推荐选项 1: Qwen3-VL-Plus (强烈推荐)
+  provider: "qwen"
+  api_key: "YOUR_QWEN_API_KEY"  # 从环境变量 DASHSCOPE_API_KEY 读取
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  model: "qwen3-vl-plus"
+  
+  # 推荐选项 2: DeepSeek-VL (如果支持)
+  # provider: "deepseek"
+  # api_key: "YOUR_DEEPSEEK_API_KEY"
+  # base_url: "https://api.deepseek.com/v1"
+  # model: "deepseek-vl"
+  
+  # 推荐选项 3: GPT-4o
+  # provider: "openai"
+  # api_key: "YOUR_OPENAI_API_KEY"
+  # base_url: "https://api.openai.com/v1"
+  # model: "gpt-4o"
+  
+  temperature: 0.1
+  max_tokens: 1000
+
+# Stage Manager Configuration
+stage_manager:
+  max_stages: 3  # 最大阶段数
+  completion_threshold: 0.7  # 阶段完成的置信度阈值 (0.0-1.0)
+  check_frequency: 1  # 每执行N步检查一次阶段完成状态
+  enable_early_termination: true  # 允许提前终止（所有阶段完成后）
+  save_stage_logs: true  # 保存阶段执行日志
+
+# Evaluation Configuration
+evaluation:
+  save_stage_visualization: true  # 保存每个阶段的可视化
+  save_stage_metrics: true  # 保存每个阶段的指标
+  stage_timeout: 100  # 单个阶段的最大步数限制

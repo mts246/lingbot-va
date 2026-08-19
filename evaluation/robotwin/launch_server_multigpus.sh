@@ -1,9 +1,9 @@
 START_PORT=${START_PORT:-29556}
 MASTER_PORT=${MASTER_PORT:-29661}
-LOG_DIR='./logs'
+LOG_DIR='./logs/action_one_clean'
 mkdir -p $LOG_DIR
 
-save_root='./visualization/'
+save_root='./visualization/action_one_clean'
 mkdir -p $save_root
 
 batch_time=$(date +%Y%m%d_%H%M%S)
